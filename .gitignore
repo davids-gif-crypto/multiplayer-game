@@ -1,0 +1,13 @@
+# Gradle build output and caches
+.gradle/
+build/
+.kotlin/
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+out/
+
+# macOS
+.DS_Store

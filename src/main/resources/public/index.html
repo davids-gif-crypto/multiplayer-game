@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Food Fight</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!--
+    Milestone 0 page. It only checks that the browser can reach the server
+    over a WebSocket. The real home, lobby and match screens come in Milestone 1.
+  -->
+  <main class="card">
+    <h1>Food Fight</h1>
+    <p class="tagline">A cafeteria brawl on a lunch tray.</p>
+    <p>Server connection: <strong id="status">connecting...</strong></p>
+    <button id="echo-button" type="button" disabled>Send test message</button>
+    <p id="echo-result" class="small"></p>
+  </main>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+/* Food Fight styles.
+   Only system fonts are used, because school filters often block web fonts. */
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4ead5;            /* pale cafeteria wall */
+  color: #3b2a1a;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+.card {
+  background: #fffaf0;
+  border: 3px solid #c9a46b;
+  border-radius: 16px;
+  padding: 24px 32px;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: 0 4px 0 #c9a46b;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 48px;
+  color: #c0392b;                 /* ketchup red */
+}
+
+.tagline {
+  margin-top: 0;
+  color: #7a5c3a;
+}
+
+button {
+  font: inherit;
+  font-size: 18px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 10px;
+  background: #e67e22;
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled {
+  background: #c8b8a0;
+  cursor: default;
+}
+
+.small {
+  font-size: 14px;
+  color: #7a5c3a;
+  min-height: 1.2em;
+}
