@@ -1,37 +1,108 @@
 // main.js
-// Milestone 0: connect to the server's WebSocket and test the echo.
-// In later milestones this file becomes the starting point that wires
-// together the network, input, lobby and game modules.
+// The starting point of the game page. It connects to the server and sends
+// each incoming message to the code that handles it.
 
-const statusEl = document.getElementById("status");
-const buttonEl = document.getElementById("echo-button");
-const resultEl = document.getElementById("echo-result");
+import { connect } from "./net.js";
+import { showScreen, getScreen, friendlyError, setText, installHowTo, showConnectionLost } from "./ui.js";
+import { setupHome, homeReady, stopWaiting, refreshHomeButtons, setupLobby, renderLobby } from "./lobby.js";
+import * as game from "./game.js";
 
-// Build the WebSocket address from the page address, so the same code
-// works on localhost, on a school network, and on Render (which uses https).
-const wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
-const socket = new WebSocket(wsUrl);
+// Everything this browser knows about where it is.
+const app = {
+  connected: false, // is the WebSocket open?
+  busy: false,      // waiting for the reply to create or join?
+  myId: 0,          // my player id in the room
+  room: "",         // room code, "" when not in a room
+  hostId: 0,        // id of the current host
+  players: [],      // latest player list from the server
+};
 
-socket.addEventListener("open", () => {
-  statusEl.textContent = "connected";
-  buttonEl.disabled = false;
+installHowTo();
+setupHome(app);
+setupLobby(app, goHome);
+showScreen("home");
+
+connect({
+  onOpen() {
+    app.connected = true;
+    setText("home-status", "Connected. Ready to play!");
+    homeReady(app);
+  },
+  onMessage: handleMessage,
+  onClose() {
+    app.connected = false;
+    refreshHomeButtons(app);
+    showConnectionLost(app.room);
+  },
+  onFail() {
+    setText("home-status", "");
+    setText("home-error",
+      "Could not reach the game server. Some school networks block games like this. " +
+      "Try another network, or ask whoever runs the server for its local address.");
+  },
 });
 
-socket.addEventListener("message", (event) => {
-  // The M0 server sends our own message back. textContent (not innerHTML)
-  // makes sure text is shown as plain text and never run as code.
-  resultEl.textContent = "Server echoed: " + event.data;
-});
+function handleMessage(msg) {
+  switch (msg.t) {
+    case "joined":
+      app.myId = msg.you;
+      app.room = msg.room;
+      stopWaiting(app);
+      // Put the code in the address bar, so a refresh or a copied URL keeps it.
+      history.replaceState(null, "", "?room=" + msg.room);
+      setText("lobby-error", "");
+      showScreen("lobby");
+      break;
 
-socket.addEventListener("close", () => {
-  statusEl.textContent = "disconnected (reload the page to try again)";
-  buttonEl.disabled = true;
-});
+    case "lobby":
+      app.hostId = msg.hostId;
+      app.players = msg.players;
+      renderLobby(app);
+      break;
 
-socket.addEventListener("error", () => {
-  statusEl.textContent = "could not connect (the network may block WebSockets)";
-});
+    case "countdown":
+      showScreen("match");
+      game.showCountdown(msg.n);
+      break;
 
-buttonEl.addEventListener("click", () => {
-  socket.send(JSON.stringify({ t: "ping", at: Date.now() }));
-});
+    case "state":
+      if (getScreen() !== "match") {
+        showScreen("match");
+      }
+      game.onState(msg);
+      break;
+
+    case "error":
+      showError(msg);
+      break;
+
+    default:
+      // Unknown message types are ignored, so an older page keeps working
+      // if the server learns new messages.
+      break;
+  }
+}
+
+// Shows a server error on whichever screen is open.
+function showError(msg) {
+  const text = friendlyError(msg.code, msg.msg);
+  if (getScreen() === "home") {
+    stopWaiting(app);
+    setText("home-error", text);
+  } else if (getScreen() === "lobby") {
+    setText("lobby-error", text);
+  } else {
+    console.warn("Server error:", msg.code, msg.msg);
+  }
+}
+
+// Back to the home screen after pressing Leave.
+function goHome() {
+  app.room = "";
+  app.myId = 0;
+  app.players = [];
+  history.replaceState(null, "", location.pathname);
+  setText("home-error", "");
+  showScreen("home");
+  refreshHomeButtons(app);
+}

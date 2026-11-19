@@ -40,15 +40,25 @@ java -jar build/libs/app.jar
 
 | Path | What it is |
 |---|---|
-| `src/main/java/com/foodfight/Main.java` | Starts the web server, the health check and the WebSocket |
-| `src/main/java/com/foodfight/net/` | WebSocket handling (right now just an echo) |
-| `src/main/resources/public/` | The web page: HTML, CSS and JavaScript |
-| `src/test/java/com/foodfight/` | JUnit 5 tests |
+| `src/main/java/com/foodfight/Main.java` | Starts the web server, the health check, the WebSocket and the game thread |
+| `src/main/java/com/foodfight/net/` | WebSocket messages (`Protocol`), one browser connection (`Connection`), rate limiting |
+| `src/main/java/com/foodfight/room/` | Rooms, room codes, nicknames, host, lobby, countdown, and the 60 Hz game loop (`RoomManager`) |
+| `src/main/java/com/foodfight/sim/` | The game simulation. Plain Java with no web code. `Balance.java` holds every tuning number |
+| `src/main/resources/public/` | The web page: HTML, CSS and JavaScript (no frameworks, no build step) |
+| `src/test/java/com/foodfight/` | JUnit 5 tests, including a test that starts the real server and connects with WebSocket clients |
+
+## How the server is put together
+
+- Browsers only send messages. They never change game state themselves.
+- Each room has an inbox (a thread safe queue). Web threads put messages in the inbox.
+- One game thread runs 60 times per second. Each time, it empties every room's inbox and updates the room. Since only this one thread ever changes a room, the room code needs no locks.
+- During a match the room sends a snapshot 30 times per second (every 2nd tick).
+- Messages to browsers are sent without waiting for them to arrive, so one slow Chromebook cannot freeze the game for everyone. If a browser falls behind, it skips a few snapshots until it catches up.
 
 ## Progress
 
 - [x] M0 Project skeleton: Gradle, web page, `/health`, WebSocket echo
-- [ ] M1 Rooms and lobby
+- [x] M1 Rooms and lobby: room codes, nicknames, fighter picking, host start, countdown
 - [ ] M2 Movement
 - [ ] M3 Combat
 - [ ] M4 Match flow

@@ -1,6 +1,7 @@
 package com.foodfight;
 
 import com.foodfight.net.WsHandler;
+import com.foodfight.room.RoomManager;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 
@@ -37,9 +38,16 @@ public class Main {
      * Tests call this too, then start it on a random free port.
      */
     public static Javalin createApp() {
-        WsHandler wsHandler = new WsHandler();
+        RoomManager rooms = new RoomManager();
+        WsHandler wsHandler = new WsHandler(rooms);
 
         Javalin app = Javalin.create(config -> {
+            // Start the game thread when the server starts, stop it when the server stops.
+            config.events(events -> {
+                events.serverStarted(rooms::start);
+                events.serverStopped(rooms::stop);
+            });
+
             // Serve everything in the "public" folder inside the jar.
             config.staticFiles.add("/public", Location.CLASSPATH);
 

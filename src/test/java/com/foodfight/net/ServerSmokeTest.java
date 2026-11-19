@@ -10,18 +10,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.net.http.WebSocket;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Milestone 0 smoke test. Starts the real server on a random free port and
- * checks the three basic jobs: the health check, the web page and the
- * WebSocket echo.
+ * Smoke test. Starts the real server on a random free port and checks the
+ * health check and the web page. The WebSocket is tested in
+ * LobbyIntegrationTest.
  */
 class ServerSmokeTest {
 
@@ -53,25 +49,6 @@ class ServerSmokeTest {
         HttpResponse<String> response = get("/");
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("Food Fight"));
-    }
-
-    @Test
-    void webSocketEchoesMessages() throws Exception {
-        CompletableFuture<String> reply = new CompletableFuture<>();
-
-        WebSocket socket = http.newWebSocketBuilder()
-                .buildAsync(URI.create("ws://127.0.0.1:" + port + "/ws"), new WebSocket.Listener() {
-                    @Override
-                    public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
-                        reply.complete(data.toString());
-                        return null;
-                    }
-                })
-                .get(5, TimeUnit.SECONDS);
-
-        socket.sendText("{\"t\":\"ping\"}", true);
-        assertEquals("{\"t\":\"ping\"}", reply.get(5, TimeUnit.SECONDS));
-        socket.sendClose(WebSocket.NORMAL_CLOSURE, "done");
     }
 
     private HttpResponse<String> get(String path) throws Exception {
