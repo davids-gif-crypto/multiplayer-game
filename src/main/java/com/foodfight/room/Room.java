@@ -13,10 +13,15 @@ import com.foodfight.net.Protocol.Leave;
 import com.foodfight.net.Protocol.Lobby;
 import com.foodfight.net.Protocol.LobbyPlayer;
 import com.foodfight.net.Protocol.Pick;
+import com.foodfight.net.Protocol.PlayerState;
 import com.foodfight.net.Protocol.Start;
 import com.foodfight.net.Protocol.State;
 import com.foodfight.sim.Balance;
+import com.foodfight.sim.Fighter;
 import com.foodfight.sim.FighterType;
+import com.foodfight.sim.GameWorld;
+import com.foodfight.sim.InputState;
+import com.foodfight.sim.Stage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +35,7 @@ import static com.foodfight.net.Protocol.NOT_HOST;
 import static com.foodfight.net.Protocol.ROOM_FULL;
 
 /**
- * One game room: up to 4 players, a lobby, and (later) a match.
+ * One game room: up to 4 players, a lobby, and a match (a GameWorld).
  *
  * THREADING RULE: only the game thread may change a room. WebSocket threads
  * call {@link #enqueue} to drop a message in the inbox, and the game thread
@@ -58,6 +63,9 @@ public class Room {
     private int phaseTicks = 0;      // ticks since the current phase began
     private int emptyTicks = 0;      // ticks in a row with nobody connected
     private int matchTicksLeft = 0;  // match timer
+
+    /** The match simulation. Only exists during COUNTDOWN and PLAYING. */
+    private GameWorld world = null;
 
     public Room(String code) {
         this.code = code;
@@ -144,7 +152,11 @@ public class Room {
             case Pick pick -> pickFighter(player, pick.fighter());
             case Start start -> startCountdown(player);
             case Input input -> {
-                // Milestone 2 passes held keys to the simulation.
+                // Held keys only matter while there is a match.
+                if (world != null) {
+                    world.setInput(player.id, new InputState(input.left(), input.right(), input.jump(),
+                            input.down(), input.attack(), input.special(), input.shield()));
+                }
             }
             case Again again -> backToLobby(player);
             case Leave leave -> removePlayer(player);
@@ -217,6 +229,12 @@ public class Room {
                     "You need at least " + Balance.MIN_PLAYERS_TO_START + " players to start."));
             return;
         }
+        // Build the match now, so the fighters can be seen standing on the
+        // tray during the countdown. Join order decides the spawn points.
+        world = new GameWorld(Stage.lunchTray());
+        for (Player p : players) {
+            world.addFighter(p.id, p.fighter);
+        }
         setPhase(Phase.COUNTDOWN);
         broadcast(new Countdown(Balance.COUNTDOWN_FROM));
     }
@@ -232,6 +250,7 @@ public class Room {
         // People who left during the match or on the results screen are
         // dropped now, so their spots open up for new players.
         players.removeIf(p -> !p.connected);
+        world = null;
         setPhase(Phase.LOBBY);
         broadcastLobby();
     }
@@ -244,6 +263,10 @@ public class Room {
 
         if (phase == Phase.LOBBY) {
             players.remove(player);
+        }
+        if (world != null) {
+            // Let go of their keys so their fighter does not keep running.
+            world.setInput(player.id, InputState.NONE);
         }
         // During a match or the results screen the player stays on the list,
         // so the results can still show their name. Milestone 4 eliminates
@@ -276,40 +299,66 @@ public class Room {
         phaseTicks = 0;
     }
 
-    /** Shows 3, then 2, then 1, one second apart, then starts the match. */
+    /**
+     * Shows 3, then 2, then 1, one second apart, then starts the match.
+     * The fighters stand still on the tray, but snapshots are still sent so
+     * everyone can see the stage behind the big numbers.
+     */
     private void updateCountdown() {
-        if (phaseTicks % Balance.COUNTDOWN_STEP_TICKS != 0) {
-            return;
-        }
-        int stepsDone = phaseTicks / Balance.COUNTDOWN_STEP_TICKS;
-        if (stepsDone >= Balance.COUNTDOWN_FROM) {
-            startMatch();
-        } else {
+        if (phaseTicks % Balance.COUNTDOWN_STEP_TICKS == 0) {
+            int stepsDone = phaseTicks / Balance.COUNTDOWN_STEP_TICKS;
+            if (stepsDone >= Balance.COUNTDOWN_FROM) {
+                startMatch();
+                return;
+            }
             broadcast(new Countdown(Balance.COUNTDOWN_FROM - stepsDone));
+        }
+        if (phaseTicks % Balance.SNAPSHOT_EVERY_TICKS == 0) {
+            sendSnapshot();
         }
     }
 
     private void startMatch() {
         setPhase(Phase.PLAYING);
         matchTicksLeft = Balance.MATCH_SECONDS * Balance.TICKS_PER_SECOND;
-        // Milestone 2 builds the GameWorld with one fighter per player here.
     }
 
     private void updatePlaying() {
+        clearStaleInputs();
+        world.step();
         if (matchTicksLeft > 0) {
             matchTicksLeft--;
         }
-        // Milestone 2 steps the simulation here, and Milestone 4 ends the
-        // match when the timer runs out or one fighter is left.
+        // Milestone 4 ends the match when the timer runs out or one fighter is left.
 
         if (phaseTicks % Balance.SNAPSHOT_EVERY_TICKS == 0) {
             sendSnapshot();
         }
     }
 
+    /**
+     * Browsers send their keys at least every 100 ms. If we have heard
+     * nothing from a player for 2 seconds, their browser is probably frozen
+     * or asleep, so let go of their keys before their fighter runs off stage.
+     */
+    private void clearStaleInputs() {
+        for (Player p : players) {
+            if (tick - p.lastHeardTick > Balance.INPUT_TIMEOUT_TICKS) {
+                world.setInput(p.id, InputState.NONE);
+            }
+        }
+    }
+
     private void sendSnapshot() {
         int secondsLeft = (matchTicksLeft + Balance.TICKS_PER_SECOND - 1) / Balance.TICKS_PER_SECOND;
-        State state = new State(tick, phase.name(), secondsLeft, List.of(), List.of(), List.of());
+        if (phase == Phase.COUNTDOWN) {
+            secondsLeft = Balance.MATCH_SECONDS;
+        }
+        List<PlayerState> fighterRows = new ArrayList<>();
+        for (Fighter f : world.fighters()) {
+            fighterRows.add(PlayerState.of(f));
+        }
+        State state = new State(tick, phase.name(), secondsLeft, fighterRows, List.of(), world.takeEvents());
         for (Player p : players) {
             // A backed up browser skips this snapshot. A newer one comes soon.
             if (p.connected && !p.link.isBackedUp()) {
@@ -369,5 +418,10 @@ public class Room {
 
     public List<Player> players() {
         return List.copyOf(players);
+    }
+
+    /** The match simulation, or null when there is no match. For tests. */
+    GameWorld world() {
+        return world;
     }
 }

@@ -388,19 +388,55 @@ kbd {
   text-align: center;
 }
 
-/* ---------- Match (placeholder until Milestone 2) ---------- */
+/* ---------- Match ---------- */
 
-.match-panel {
-  margin-top: 15vh;
-  min-width: 320px;
-  text-align: center;
+/* No scrollbars during a match, the canvas is exactly the window size. */
+body.in-match {
+  overflow: hidden;
+}
+
+.match-screen {
+  display: block;
+  position: fixed;
+  inset: 0;
+  padding: 0;
+  background: #2b1d12;
+}
+
+#game-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+}
+
+.match-timer {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 16px;
+  border-radius: 10px;
+  background: rgba(43, 29, 18, 0.75);
+  color: white;
+  font-size: 24px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .countdown {
-  font-size: 140px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -60%);
+  font-size: 160px;
   font-weight: 900;
   color: var(--ketchup);
+  -webkit-text-stroke: 6px white;
+  paint-order: stroke fill;
   line-height: 1;
+  pointer-events: none;
 }
 
 /* ---------- Overlay ---------- */

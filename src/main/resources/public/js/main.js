@@ -31,6 +31,7 @@ connect({
   onMessage: handleMessage,
   onClose() {
     app.connected = false;
+    game.leaveMatch();
     refreshHomeButtons(app);
     showConnectionLost(app.room);
   },
@@ -58,17 +59,16 @@ function handleMessage(msg) {
       app.hostId = msg.hostId;
       app.players = msg.players;
       renderLobby(app);
+      game.updateRoster(app);
       break;
 
     case "countdown":
-      showScreen("match");
+      openMatchScreen();
       game.showCountdown(msg.n);
       break;
 
     case "state":
-      if (getScreen() !== "match") {
-        showScreen("match");
-      }
+      openMatchScreen();
       game.onState(msg);
       break;
 
@@ -80,6 +80,14 @@ function handleMessage(msg) {
       // Unknown message types are ignored, so an older page keeps working
       // if the server learns new messages.
       break;
+  }
+}
+
+// Switches to the match screen, once, when the countdown starts.
+function openMatchScreen() {
+  if (getScreen() !== "match") {
+    showScreen("match");
+    game.enterMatch(app);
   }
 }
 

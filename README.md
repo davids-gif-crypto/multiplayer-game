@@ -43,7 +43,8 @@ java -jar build/libs/app.jar
 | `src/main/java/com/foodfight/Main.java` | Starts the web server, the health check, the WebSocket and the game thread |
 | `src/main/java/com/foodfight/net/` | WebSocket messages (`Protocol`), one browser connection (`Connection`), rate limiting |
 | `src/main/java/com/foodfight/room/` | Rooms, room codes, nicknames, host, lobby, countdown, and the 60 Hz game loop (`RoomManager`) |
-| `src/main/java/com/foodfight/sim/` | The game simulation. Plain Java with no web code. `Balance.java` holds every tuning number |
+| `src/main/java/com/foodfight/sim/` | The game simulation. Plain Java with no web code. `GameWorld` runs the physics, `Stage` is the level layout, `Balance.java` holds every tuning number |
+| `src/main/resources/public/js/` | The browser code: `net.js` (WebSocket), `input.js` (keyboard), `interp.js` (smooth motion), `render.js` (drawing), `game.js` (match screen), `lobby.js` and `ui.js` (screens) |
 | `src/main/resources/public/` | The web page: HTML, CSS and JavaScript (no frameworks, no build step) |
 | `src/test/java/com/foodfight/` | JUnit 5 tests, including a test that starts the real server and connects with WebSocket clients |
 
@@ -55,11 +56,18 @@ java -jar build/libs/app.jar
 - During a match the room sends a snapshot 30 times per second (every 2nd tick).
 - Messages to browsers are sent without waiting for them to arrive, so one slow Chromebook cannot freeze the game for everyone. If a browser falls behind, it skips a few snapshots until it catches up.
 
+## How the browser draws the match
+
+- The world is always 1280 x 720 units. The canvas scales it to fit the window, with dark bars on the sides so nothing gets stretched.
+- The stage never moves, so it is drawn once onto a hidden canvas and copied each frame.
+- Snapshots arrive 30 times per second but the screen draws 60. `interp.js` draws the world about 100 ms in the past and blends between the two snapshots around that moment, so motion looks smooth. If snapshots stop, it guesses ahead for at most 100 ms, then freezes.
+- Knockouts and respawns snap instead of sliding across the screen.
+
 ## Progress
 
 - [x] M0 Project skeleton: Gradle, web page, `/health`, WebSocket echo
 - [x] M1 Rooms and lobby: room codes, nicknames, fighter picking, host start, countdown
-- [ ] M2 Movement
+- [x] M2 Movement: gravity, running, jumping, double jump, platforms, blast zone, respawning, smooth drawing
 - [ ] M3 Combat
 - [ ] M4 Match flow
 - [ ] M5 Polish and feel

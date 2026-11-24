@@ -1,11 +1,228 @@
 // render.js
 // Drawing code. Everything is drawn with simple shapes, no images.
 //
-// Right now this file draws the three fighters, which the lobby uses for its
-// preview cards. Milestone 2 adds the stage, the camera scaling and the rest.
+// The game world is always 1280 x 720 units. We scale it to fit the window
+// and add dark bars on the sides (letterboxing) so it never gets stretched.
 //
 // Positions follow the server: (x, y) is the fighter's feet, in the middle
 // at the bottom. y grows DOWNWARD, like on every canvas.
+
+export const WORLD_WIDTH = 1280;
+export const WORLD_HEIGHT = 720;
+
+// Sharp screens have more pixels per CSS pixel (the device pixel ratio).
+// Drawing all of them is slow on a Chromebook, so we stop at 1.5.
+const MAX_PIXEL_RATIO = 1.5;
+const LETTERBOX_COLOR = "#2b1d12";
+
+// How tall each fighter is drawn, so name tags sit just above the head.
+const FIGHTER_HEIGHT = { BRAWLER: 56, SPEEDSTER: 72, ZONER: 78 };
+
+// The stage layout. These numbers must match Stage.java on the server.
+const TRAY = { x: 240, y: 520, w: 800, h: 40 };
+const BREADS = [
+  { x: 300, y: 360, w: 220, h: 24 },
+  { x: 760, y: 360, w: 220, h: 24 },
+];
+
+let canvas = null;
+let ctx = null;
+let background = null;   // the stage drawn once, then copied every frame
+let pixelRatio = 1;
+let worldScale = 1;      // CSS pixels per world unit
+let offsetX = 0;         // where the world starts inside the window, in CSS pixels
+let offsetY = 0;
+const tagWidths = new Map(); // name tag widths, measured once per name
+
+export function initRenderer(canvasElement) {
+  canvas = canvasElement;
+  ctx = canvas.getContext("2d");
+  window.addEventListener("resize", resizeRenderer);
+}
+
+// Fits the canvas to the window. Called on resize and when a match starts.
+export function resizeRenderer() {
+  const cssWidth = window.innerWidth;
+  const cssHeight = window.innerHeight;
+  pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
+
+  canvas.width = Math.round(cssWidth * pixelRatio);
+  canvas.height = Math.round(cssHeight * pixelRatio);
+  canvas.style.width = cssWidth + "px";
+  canvas.style.height = cssHeight + "px";
+
+  // Biggest scale that still fits both ways, then center the leftover space.
+  worldScale = Math.min(cssWidth / WORLD_WIDTH, cssHeight / WORLD_HEIGHT);
+  offsetX = (cssWidth - WORLD_WIDTH * worldScale) / 2;
+  offsetY = (cssHeight - WORLD_HEIGHT * worldScale) / 2;
+
+  buildBackground();
+}
+
+// Draws the parts that never move (wall, table, tray, bread) onto a hidden
+// canvas once. Each frame we copy it in one fast drawImage call instead of
+// drawing all those shapes again.
+function buildBackground() {
+  const k = worldScale * pixelRatio;
+  background = document.createElement("canvas");
+  background.width = Math.ceil(WORLD_WIDTH * k);
+  background.height = Math.ceil(WORLD_HEIGHT * k);
+  const bg = background.getContext("2d");
+  bg.scale(k, k);
+
+  drawWall(bg);
+  drawTable(bg);
+  drawTray(bg);
+  for (const bread of BREADS) {
+    drawBread(bg, bread);
+  }
+}
+
+// Draws one frame.
+//   views   Map of id to { x, y, face, fighter, inv, visible } from interp.js
+//   roster  Map of id to { name, color }
+//   myId    my player id, so my tag stands out and I am drawn on top
+//   now     time in ms, used for blinking
+export function drawFrame(views, roster, myId, now) {
+  // Letterbox bars, then the pre-drawn stage.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = LETTERBOX_COLOR;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(background, Math.round(offsetX * pixelRatio), Math.round(offsetY * pixelRatio));
+
+  // From here on we draw in world units.
+  const k = worldScale * pixelRatio;
+  ctx.setTransform(k, 0, 0, k, offsetX * pixelRatio, offsetY * pixelRatio);
+
+  // Everyone else first, then me, so I am never hidden behind someone.
+  for (const view of views.values()) {
+    if (view.visible && view.id !== myId) {
+      drawPlayer(view, roster.get(view.id), false, now);
+    }
+  }
+  const me = views.get(myId);
+  if (me !== undefined && me.visible) {
+    drawPlayer(me, roster.get(myId), true, now);
+  }
+}
+
+function drawPlayer(view, info, isMe, now) {
+  // Blink while invulnerable after respawning.
+  const blinkOff = view.inv > 0 && Math.floor(now / 100) % 2 === 0;
+  ctx.globalAlpha = blinkOff ? 0.35 : 1;
+  drawFighter(ctx, view.fighter, view.x, view.y, view.face, 1);
+  ctx.globalAlpha = 1;
+
+  if (info !== undefined) {
+    const headY = view.y - (FIGHTER_HEIGHT[view.fighter] || 70);
+    drawNameTag(info.name, info.color, view.x, headY, isMe);
+  }
+}
+
+// A colored tag with the nickname, and a small triangle pointing at the head.
+function drawNameTag(name, color, x, headY, isMe) {
+  ctx.font = "bold 15px system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif";
+  let width = tagWidths.get(name);
+  if (width === undefined) {
+    width = ctx.measureText(name).width + 14;
+    tagWidths.set(name, width);
+  }
+  const tagBottom = headY - 14;
+  const tagTop = tagBottom - 22;
+
+  // Triangle
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x - 6, tagBottom - 1);
+  ctx.lineTo(x + 6, tagBottom - 1);
+  ctx.lineTo(x, headY - 5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Tag
+  roundRect(ctx, x - width / 2, tagTop, width, 22, 6);
+  ctx.fill();
+  if (isMe) {
+    ctx.strokeStyle = "#fff35c";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(name, x, tagTop + 11.5);
+}
+
+// ---------- The stage (drawn once into the background) ----------
+
+function drawWall(g) {
+  g.fillStyle = "#f4ead5";
+  g.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+
+  // Faint wall tiles
+  g.strokeStyle = "#eadcc0";
+  g.lineWidth = 2;
+  for (let x = 0; x <= WORLD_WIDTH; x += 80) {
+    line(g, x, 0, x, 620);
+  }
+  for (let y = 0; y <= 620; y += 80) {
+    line(g, 0, y, WORLD_WIDTH, y);
+  }
+
+  // A green stripe, like a school cafeteria wall
+  g.fillStyle = "#cfe3c3";
+  g.fillRect(0, 200, WORLD_WIDTH, 22);
+  g.fillStyle = "#b8d4a8";
+  g.fillRect(0, 222, WORLD_WIDTH, 4);
+}
+
+function drawTable(g) {
+  g.fillStyle = "#c8995f";
+  g.fillRect(0, 620, WORLD_WIDTH, 100);
+  g.fillStyle = "#ddb27a";
+  g.fillRect(0, 620, WORLD_WIDTH, 10);
+  g.fillStyle = "#a87d47";
+  g.fillRect(0, 618, WORLD_WIDTH, 3);
+
+  // Soft shadow of the tray on the table
+  g.fillStyle = "rgba(0, 0, 0, 0.12)";
+  g.beginPath();
+  g.ellipse(640, 642, 400, 12, 0, 0, Math.PI * 2);
+  g.fill();
+}
+
+function drawTray(g) {
+  // Body
+  g.fillStyle = "#6f87a0";
+  roundRect(g, TRAY.x, TRAY.y, TRAY.w, TRAY.h, 10);
+  g.fill();
+  // Lighter top surface, where fighters stand
+  g.fillStyle = "#a9bccf";
+  roundRect(g, TRAY.x, TRAY.y, TRAY.w, 9, 4);
+  g.fill();
+  // Darker compartments on the front face
+  g.fillStyle = "#566d85";
+  for (let i = 0; i < 4; i++) {
+    roundRect(g, TRAY.x + 30 + i * 190, TRAY.y + 16, 170, 16, 6);
+    g.fill();
+  }
+}
+
+function drawBread(g, b) {
+  // Crust: two bumps on top, then the slab
+  g.fillStyle = "#c98b4a";
+  circle(g, b.x + 26, b.y + 8, 16);
+  circle(g, b.x + b.w - 26, b.y + 8, 16);
+  roundRect(g, b.x, b.y, b.w, b.h, 10);
+  g.fill();
+  // Lighter crumb inside
+  g.fillStyle = "#f3d9a4";
+  circle(g, b.x + 26, b.y + 9, 11);
+  circle(g, b.x + b.w - 26, b.y + 9, 11);
+  roundRect(g, b.x + 5, b.y + 5, b.w - 10, b.h - 10, 6);
+  g.fill();
+}
 
 // Draws one fighter.
 //   type   "BRAWLER", "SPEEDSTER" or "ZONER"

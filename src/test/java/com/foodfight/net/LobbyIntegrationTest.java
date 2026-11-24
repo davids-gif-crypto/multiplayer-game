@@ -152,6 +152,38 @@ class LobbyIntegrationTest {
     }
 
     @Test
+    void heldKeysMoveTheFighterOverTheNetwork() throws Exception {
+        TestClient host = client();
+        String code = host.createRoom("Host");
+        TestClient guest = client();
+        int guestId = guest.joinRoom(code, "Runner").get("you").asInt();
+        host.send("t", "start");
+
+        // Wait for the match to begin, then hold right.
+        JsonNode state = guest.await("state");
+        while (!state.get("phase").asText().equals("PLAYING")) {
+            state = guest.await("state");
+        }
+        double startX = playerX(state, guestId);
+        assertEquals(540, startX, 1e-9, "second player spawns at x 540");
+
+        guest.send("t", "input", "seq", 1, "right", true);
+        TimeUnit.MILLISECONDS.sleep(500);
+        guest.drain();
+        double laterX = playerX(guest.await("state"), guestId);
+        assertTrue(laterX > startX + 50, "moved right, x went from " + startX + " to " + laterX);
+    }
+
+    private static double playerX(JsonNode state, int id) {
+        for (JsonNode player : state.get("players")) {
+            if (player.get("id").asInt() == id) {
+                return player.get("x").asDouble();
+            }
+        }
+        throw new AssertionError("player " + id + " not in snapshot");
+    }
+
+    @Test
     void garbageDoesNotBreakTheConnection() throws Exception {
         TestClient c = client();
         c.sendRaw("this is not json");

@@ -62,12 +62,12 @@
     <div class="howto-slot"></div>
   </section>
 
-  <!-- 3 and 4. COUNTDOWN and MATCH. Milestone 2 adds the canvas here. -->
-  <section id="screen-match" class="screen hidden">
-    <div class="panel match-panel">
-      <div id="countdown" class="countdown"></div>
-      <p id="match-info" class="status"></p>
-    </div>
+  <!-- 3 and 4. COUNTDOWN and MATCH: one canvas that fills the window, with
+       the timer and the big countdown numbers laid over it. -->
+  <section id="screen-match" class="screen match-screen hidden">
+    <canvas id="game-canvas"></canvas>
+    <div id="match-timer" class="match-timer">5:00</div>
+    <div id="countdown" class="countdown hidden"></div>
   </section>
 
   <!-- Shown when the WebSocket closes -->

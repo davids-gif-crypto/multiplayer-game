@@ -274,6 +274,74 @@ class RoomTest {
         assertEquals(before, links[1].sent.size());
     }
 
+    // ---------- the match ----------
+
+    private static Protocol.Input keys(boolean left, boolean right) {
+        return new Protocol.Input(1, left, right, false, false, false, false, false);
+    }
+
+    @Test
+    void countdownSnapshotsShowFightersStandingAtTheirSpawns() {
+        FakeLink[] links = twoPlayersCountingDown();
+        ticks(10);
+        State state = links[1].last(State.class);
+        assertEquals("COUNTDOWN", state.phase());
+        assertEquals(2, state.players().size());
+        assertEquals(380, state.players().get(0).x(), 1e-9);
+        assertEquals(540, state.players().get(1).x(), 1e-9);
+        assertEquals(520, state.players().get(1).y(), 1e-9);
+        assertEquals(Balance.MATCH_SECONDS, state.timeLeft());
+    }
+
+    @Test
+    void fightersDoNotMoveDuringTheCountdown() {
+        FakeLink[] links = twoPlayersCountingDown();
+        send(links[0], keys(false, true));
+        ticks(60);
+        assertEquals(380, room.world().fighter(idOf(links[0])).x(), 1e-9);
+    }
+
+    @Test
+    void heldKeysMoveTheFighterDuringTheMatch() {
+        FakeLink[] links = twoPlayersCountingDown();
+        ticks(3 * Balance.COUNTDOWN_STEP_TICKS);
+        assertEquals(Phase.PLAYING, room.phase());
+
+        send(links[0], keys(false, true));
+        ticks(30);
+        assertTrue(room.world().fighter(idOf(links[0])).x() > 380);
+        assertEquals(540, room.world().fighter(idOf(links[1])).x(), 1e-9, "the other one did not move");
+    }
+
+    @Test
+    void keysAreReleasedAfterTwoSecondsOfSilence() {
+        FakeLink[] links = twoPlayersCountingDown();
+        ticks(3 * Balance.COUNTDOWN_STEP_TICKS);
+        send(links[0], keys(false, true));
+        int hostId = idOf(links[0]);
+        ticks(Balance.INPUT_TIMEOUT_TICKS - 5);
+        assertTrue(room.world().fighter(hostId).input().right(), "still held");
+        ticks(10);
+        assertFalse(room.world().fighter(hostId).input().right(), "let go after the timeout");
+    }
+
+    @Test
+    void disconnectingReleasesKeys() {
+        FakeLink[] links = twoPlayersCountingDown();
+        ticks(3 * Balance.COUNTDOWN_STEP_TICKS);
+        send(links[0], keys(true, false));
+        send(links[0], new Closed());
+        assertFalse(room.world().fighter(idOf(links[0])).input().left());
+    }
+
+    @Test
+    void inputInTheLobbyIsIgnored() {
+        FakeLink host = create("Host");
+        send(host, keys(false, true));
+        assertNull(room.world());
+        assertEquals(Phase.LOBBY, room.phase());
+    }
+
     // ---------- deleting ----------
 
     @Test

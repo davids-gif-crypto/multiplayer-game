@@ -4,8 +4,12 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.foodfight.sim.Fighter;
+import com.foodfight.sim.GameEvent;
 
 import java.util.List;
+
+import static com.foodfight.sim.MathUtil.round1;
 
 /**
  * Every message that travels over the WebSocket, written as Java records.
@@ -152,14 +156,30 @@ public final class Protocol {
     }
 
     /**
-     * A snapshot of the match, sent 30 times per second while playing.
-     * In Milestone 1 the player, projectile and event lists are still empty.
-     * Milestone 2 fills in the players.
+     * One fighter inside a snapshot. Positions are rounded to 1 decimal place
+     * to keep the message small. st is a word like "run" or "fall",
+     * inv is invulnerable ticks left, respawn is ticks until respawn (0 if alive).
+     */
+    public record PlayerState(int id, double x, double y, double vx, double vy, int face,
+                              String fighter, int percent, int stocks, String st,
+                              int inv, int respawn) {
+
+        public static PlayerState of(Fighter f) {
+            return new PlayerState(f.id, round1(f.x()), round1(f.y()), round1(f.vx()), round1(f.vy()),
+                    f.face(), f.type.name(), f.percent(), f.stocks(), f.stateName(),
+                    f.invulnerableTicks(), f.respawnTicks());
+        }
+    }
+
+    /**
+     * A snapshot of the match, sent 30 times per second during the countdown
+     * and the match. Events are things that happened since the last snapshot.
+     * Projectiles are added in Milestone 3.
      */
     public record State(String t, long tick, String phase, int timeLeft,
-                        List<?> players, List<?> projectiles, List<?> events) {
+                        List<PlayerState> players, List<?> projectiles, List<GameEvent> events) {
         public State(long tick, String phase, int timeLeft,
-                     List<?> players, List<?> projectiles, List<?> events) {
+                     List<PlayerState> players, List<?> projectiles, List<GameEvent> events) {
             this("state", tick, phase, timeLeft, players, projectiles, events);
         }
     }
