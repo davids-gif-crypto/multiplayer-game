@@ -14,6 +14,7 @@ import com.foodfight.net.Protocol.Lobby;
 import com.foodfight.net.Protocol.LobbyPlayer;
 import com.foodfight.net.Protocol.Pick;
 import com.foodfight.net.Protocol.PlayerState;
+import com.foodfight.net.Protocol.ProjectileState;
 import com.foodfight.net.Protocol.Start;
 import com.foodfight.net.Protocol.State;
 import com.foodfight.sim.Balance;
@@ -21,6 +22,7 @@ import com.foodfight.sim.Fighter;
 import com.foodfight.sim.FighterType;
 import com.foodfight.sim.GameWorld;
 import com.foodfight.sim.InputState;
+import com.foodfight.sim.Projectile;
 import com.foodfight.sim.Stage;
 
 import java.util.ArrayList;
@@ -358,7 +360,11 @@ public class Room {
         for (Fighter f : world.fighters()) {
             fighterRows.add(PlayerState.of(f));
         }
-        State state = new State(tick, phase.name(), secondsLeft, fighterRows, List.of(), world.takeEvents());
+        List<ProjectileState> globRows = new ArrayList<>();
+        for (Projectile p : world.projectiles()) {
+            globRows.add(ProjectileState.of(p));
+        }
+        State state = new State(tick, phase.name(), secondsLeft, fighterRows, globRows, world.takeEvents());
         for (Player p : players) {
             // A backed up browser skips this snapshot. A newer one comes soon.
             if (p.connected && !p.link.isBackedUp()) {

@@ -49,6 +49,23 @@ tasks.test {
     }
 }
 
+// ./gradlew tuning prints the knockback tuning table from TuningTest.
+tasks.register<Test>("tuning") {
+    description = "Prints the knockback tuning table."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.foodfight.sim.TuningTest")
+    }
+    testLogging {
+        events("passed", "failed")
+        showStandardStreams = true
+    }
+    outputs.upToDateWhen { false } // always run, so the table always prints
+}
+
 tasks.shadowJar {
     // Name the jar "app.jar" so the Dockerfile can find it easily.
     archiveFileName.set("app.jar")

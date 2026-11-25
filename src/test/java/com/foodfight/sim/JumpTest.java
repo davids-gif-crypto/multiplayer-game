@@ -46,6 +46,26 @@ class JumpTest {
     }
 
     @Test
+    void aTapBetweenTwoTicksStillJumps() {
+        // Down and up both arrive before the next tick, like bunched up
+        // network messages. The press must not be lost.
+        Fighter f = kit.standingAt(BRAWLER, 640, 520);
+        kit.world.setInput(f.id, SimTestKit.JUMP);
+        kit.world.setInput(f.id, SimTestKit.NOTHING);
+        kit.world.step();
+        assertEquals(1, f.jumpsUsed);
+        assertTrue(f.vy < 0);
+    }
+
+    @Test
+    void aPressIsOnlyUsedOnce() {
+        Fighter f = kit.standingAt(BRAWLER, 640, 520);
+        kit.world.setInput(f.id, SimTestKit.JUMP);
+        kit.steps(2);
+        assertEquals(1, f.jumpsUsed, "the second tick did not jump again");
+    }
+
+    @Test
     void secondPressIsADoubleJump() {
         Fighter f = kit.standingAt(BRAWLER, 640, 520);
         kit.tapJump(f);

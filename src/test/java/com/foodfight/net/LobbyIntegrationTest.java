@@ -174,6 +174,47 @@ class LobbyIntegrationTest {
         assertTrue(laterX > startX + 50, "moved right, x went from " + startX + " to " + laterX);
     }
 
+    @Test
+    void attackingACloseFighterSendsAHitEvent() throws Exception {
+        TestClient host = client();
+        String code = host.createRoom("Meatball");
+        int hostId = 0;
+        TestClient guest = client();
+        int guestId = guest.joinRoom(code, "Target").get("you").asInt();
+        host.send("t", "start");
+
+        JsonNode state = host.await("state");
+        while (!state.get("phase").asText().equals("PLAYING")) {
+            state = host.await("state");
+        }
+        for (JsonNode p : state.get("players")) {
+            if (p.get("id").asInt() != guestId) {
+                hostId = p.get("id").asInt();
+            }
+        }
+
+        // The host (a Brawler at x 380) walks toward the guest (at x 540)...
+        host.send("t", "input", "seq", 1, "right", true);
+        while (playerX(state, hostId) < 450) {
+            state = host.await("state");
+        }
+        // ...stops, and swings.
+        host.send("t", "input", "seq", 2, "attack", true);
+        host.send("t", "input", "seq", 3);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        boolean hit = false;
+        while (!hit && System.nanoTime() < deadline) {
+            for (JsonNode event : guest.await("state").get("events")) {
+                if (event.get("k").asText().equals("hit") && event.get("id").asInt() == guestId) {
+                    assertEquals(10, event.get("dmg").asInt());
+                    hit = true;
+                }
+            }
+        }
+        assertTrue(hit, "the guest should have been hit");
+    }
+
     private static double playerX(JsonNode state, int id) {
         for (JsonNode player : state.get("players")) {
             if (player.get("id").asInt() == id) {

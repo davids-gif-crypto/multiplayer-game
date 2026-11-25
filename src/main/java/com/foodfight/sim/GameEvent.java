@@ -28,6 +28,16 @@ public sealed interface GameEvent {
         }
     }
 
+    /**
+     * Fighter {@code id} got hit. (x, y) is where the hit landed, dmg is the
+     * damage it did, and big means the knockback was strong (a bigger splat).
+     */
+    record Hit(String k, int id, double x, double y, int dmg, boolean big) implements GameEvent {
+        public Hit(int id, double x, double y, int dmg, boolean big) {
+            this("hit", id, round1(x), round1(y), dmg, big);
+        }
+    }
+
     /** A fighter came back after a knockout. */
     record Respawn(String k, int id) implements GameEvent {
         public Respawn(int id) {

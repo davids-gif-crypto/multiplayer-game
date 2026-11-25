@@ -63,6 +63,12 @@ class SimTestKit {
         hold(f, NOTHING, 1);
     }
 
+    /** Taps attack: holds it for one tick, then lets go (the next step sees it released). */
+    void tapAttack(Fighter f) {
+        hold(f, keys("attack"), 1);
+        world.setInput(f.id, NOTHING);
+    }
+
     void steps(int ticks) {
         for (int i = 0; i < ticks; i++) {
             world.step();

@@ -7,15 +7,21 @@
 // as it was about 100 ms ago. At that moment we almost always have one
 // snapshot just before and one just after, so we can blend ("interpolate")
 // between them for perfectly smooth motion. The price is 100 ms of delay.
+//
+// Events (hits, knockouts) are held back the same 100 ms, so a splat
+// appears exactly when the drawn fighters touch, not a little before.
 
 const TICK_MS = 1000 / 60;          // the server runs 60 ticks per second
 const INTERP_DELAY_MS = 100;        // how far in the past we draw
 const MAX_EXTRAPOLATE_MS = 100;     // how far we guess ahead if snapshots stop
 const MAX_SNAPSHOTS = 20;           // about 0.66 seconds of history
+const MAX_QUEUED_EVENTS = 100;      // so a hidden tab cannot pile up events forever
 const TELEPORT_DISTANCE = 250;      // a bigger jump than this is a teleport, so snap
 
-// Each entry: { time: server time in ms, players: [...] }
+// Each entry: { time: server time in ms, players: [...], projectiles: [...] }
 const buffer = [];
+// Each entry: { time, event }, oldest first.
+const eventQueue = [];
 
 // localTime - serverTime, worked out from when snapshots arrive.
 let clockOffset = null;
@@ -28,6 +34,7 @@ export const interpStats = { snapshotsPerSecond: 0 };
 // Forget everything (a new match is starting).
 export function resetInterp() {
   buffer.length = 0;
+  eventQueue.length = 0;
   clockOffset = null;
 }
 
@@ -50,9 +57,16 @@ export function addSnapshot(msg, localNow) {
   if (buffer.length > 0 && serverTime <= buffer[buffer.length - 1].time) {
     buffer.length = 0;
   }
-  buffer.push({ time: serverTime, players: msg.players });
+  buffer.push({ time: serverTime, players: msg.players, projectiles: msg.projectiles || [] });
   if (buffer.length > MAX_SNAPSHOTS) {
     buffer.shift();
+  }
+
+  for (const event of msg.events || []) {
+    eventQueue.push({ time: serverTime, event: event });
+  }
+  while (eventQueue.length > MAX_QUEUED_EVENTS) {
+    eventQueue.shift();
   }
 
   // Count snapshots per second.
@@ -64,13 +78,15 @@ export function addSnapshot(msg, localNow) {
   }
 }
 
-// Works out where every fighter should be drawn right now.
-// out is a Map of player id to a view object. The objects are reused every
-// frame, so drawing does not create garbage for the browser to clean up.
-export function sampleFighters(localNow, out) {
-  for (const view of out.values()) {
-    view.seen = false;
-  }
+// Works out where everything should be drawn right now.
+//   fighters  Map of player id to a view object (reused every frame)
+//   globs     Map of glob id to a view object (reused every frame)
+//   onEvent   called once for each event the drawn moment has reached
+// Reusing the view objects means drawing does not create garbage for the
+// browser to clean up, which keeps slow Chromebooks smooth.
+export function sampleWorld(localNow, fighters, globs, onEvent) {
+  markUnseen(fighters);
+  markUnseen(globs);
   if (buffer.length === 0) {
     return;
   }
@@ -100,13 +116,31 @@ export function sampleFighters(localNow, out) {
     }
   }
 
+  sampleFighters(older, newer, blend, extrapolateSeconds, fighters);
+  sampleGlobs(older, newer, blend, extrapolateSeconds, globs);
+
+  // Play the events whose moment has come.
+  while (eventQueue.length > 0 && eventQueue[0].time <= renderTime) {
+    onEvent(eventQueue.shift().event);
+  }
+
+  hideUnseen(fighters);
+  hideUnseen(globs);
+}
+
+function sampleFighters(older, newer, blend, extrapolateSeconds, out) {
   for (const p of newer.players) {
     let view = out.get(p.id);
     if (view === undefined) {
-      view = { id: p.id, x: 0, y: 0, face: 1, fighter: "", st: "", inv: 0, percent: 0, stocks: 0, visible: false, seen: false };
+      view = {
+        id: p.id, x: 0, y: 0, vx: 0, face: 1, fighter: "", st: "", inv: 0,
+        percent: 0, stocks: 0, visible: false, seen: false,
+        flash: 0, // frames of white flash left, set by game.js when hit
+      };
       out.set(p.id, view);
     }
     view.seen = true;
+    view.vx = p.vx;
     view.face = p.face;
     view.fighter = p.fighter;
     view.st = p.st;
@@ -115,7 +149,7 @@ export function sampleFighters(localNow, out) {
     view.stocks = p.stocks;
     view.visible = p.respawn === 0 && p.st !== "out" && p.st !== "dead";
 
-    const before = findPlayer(older.players, p.id);
+    const before = findById(older.players, p.id);
     if (extrapolateSeconds > 0) {
       view.x = p.x + p.vx * extrapolateSeconds;
       view.y = p.y + p.vy * extrapolateSeconds;
@@ -128,19 +162,57 @@ export function sampleFighters(localNow, out) {
       view.y = before.y + (p.y - before.y) * blend;
     }
   }
+}
 
-  // Anyone not in the snapshot is not drawn.
-  for (const view of out.values()) {
+function sampleGlobs(older, newer, blend, extrapolateSeconds, out) {
+  for (const g of newer.projectiles) {
+    let view = out.get(g.id);
+    if (view === undefined) {
+      view = { id: g.id, x: 0, y: 0, vx: 0, visible: false, seen: false };
+      out.set(g.id, view);
+    }
+    view.seen = true;
+    view.visible = true;
+    view.vx = g.vx;
+
+    const before = findById(older.projectiles, g.id);
+    if (extrapolateSeconds > 0) {
+      view.x = g.x + g.vx * extrapolateSeconds;
+      view.y = g.y;
+    } else if (before === null) {
+      view.x = g.x; // a brand new glob appears where it was fired
+      view.y = g.y;
+    } else {
+      view.x = before.x + (g.x - before.x) * blend;
+      view.y = before.y + (g.y - before.y) * blend;
+    }
+  }
+  // Globs that are gone for good are removed, so the map does not grow forever.
+  for (const [id, view] of out) {
+    if (!view.seen) {
+      out.delete(id);
+    }
+  }
+}
+
+function markUnseen(views) {
+  for (const view of views.values()) {
+    view.seen = false;
+  }
+}
+
+function hideUnseen(views) {
+  for (const view of views.values()) {
     if (!view.seen) {
       view.visible = false;
     }
   }
 }
 
-function findPlayer(players, id) {
-  for (const p of players) {
-    if (p.id === id) {
-      return p;
+function findById(list, id) {
+  for (const item of list) {
+    if (item.id === id) {
+      return item;
     }
   }
   return null;

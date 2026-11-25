@@ -1,5 +1,8 @@
 package com.foodfight.sim;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * One fighter in a match: where it is, how fast it is moving, its damage
  * and lives, and what keys its player is holding.
@@ -12,6 +15,9 @@ package com.foodfight.sim;
  * them through the getters at the bottom.
  */
 public class Fighter {
+
+    /** Which part of an attack a fighter is in. */
+    public enum AttackPhase { NONE, STARTUP, ACTIVE, RECOVERY }
 
     public final int id;
     public final FighterType type;
@@ -44,10 +50,32 @@ public class Fighter {
     int respawnTicks = 0;
     int hitstunTicks = 0;
 
+    // Attacking
+    boolean attacking = false;
+    /** Ticks since the attack started. 1 on the first tick. */
+    int attackTicks = 0;
+    /** Ids of everyone this attack already hit, so it hits each target once. */
+    final Set<Integer> hitThisAttack = new HashSet<>();
+    /** Zoner only: ticks until another glob may be fired. */
+    int globCooldownTicks = 0;
+
+    // Who hit us last, and when. Used to give out KO credit.
+    int lastHitBy = 0;
+    long lastHitTick = -1;
+
     // Input
     InputState input = InputState.NONE;
-    /** Was jump held last tick? Used to spot the moment jump is pressed. */
-    boolean jumpWasHeld = false;
+    /**
+     * Set the moment the jump key goes down, and used up by the next tick.
+     * Remembering the press like this means a very quick tap is never
+     * missed, even if the key went down and back up between two ticks
+     * (which happens when network messages arrive bunched together).
+     */
+    boolean jumpTapped = false;
+    /** Same idea for the attack key. */
+    boolean attackTapped = false;
+    /** Same idea for the special key. */
+    boolean specialTapped = false;
 
     Fighter(int id, FighterType type, double x, double y) {
         this.id = id;
@@ -71,7 +99,38 @@ public class Fighter {
         return new Rect(x - type.width / 2, y - type.height, type.width, type.height);
     }
 
-    /** A short word for what the fighter is doing, sent to browsers for drawing. */
+    /** Which part of the attack we are in, worked out from the attack timer. */
+    public AttackPhase attackPhase() {
+        if (!attacking) {
+            return AttackPhase.NONE;
+        }
+        AttackStats attack = type.attack;
+        if (attackTicks <= attack.startupTicks()) {
+            return AttackPhase.STARTUP;
+        }
+        if (attackTicks <= attack.startupTicks() + attack.activeTicks()) {
+            return AttackPhase.ACTIVE;
+        }
+        return AttackPhase.RECOVERY;
+    }
+
+    /**
+     * The melee hitbox, in front of the fighter and mirrored by facing. It
+     * exists whether or not the attack is active, so the debug view can draw
+     * it. GameWorld only uses it during the active part.
+     */
+    public Rect attackHitbox() {
+        AttackStats attack = type.attack;
+        double nearEdge = x + face * attack.hitboxOffset();
+        double left = (face > 0) ? nearEdge : nearEdge - attack.hitboxWidth();
+        double middleY = y - type.height / 2;
+        return new Rect(left, middleY - attack.hitboxHeight() / 2, attack.hitboxWidth(), attack.hitboxHeight());
+    }
+
+    /**
+     * A short word for what the fighter is doing, sent to browsers for drawing:
+     * idle, run, jump, fall, startup, active, recovery, hitstun, dead or out.
+     */
     public String stateName() {
         if (isOut()) {
             return "out";
@@ -81,6 +140,16 @@ public class Fighter {
         }
         if (hitstunTicks > 0) {
             return "hitstun";
+        }
+        switch (attackPhase()) {
+            case STARTUP:
+                return "startup";
+            case ACTIVE:
+                return "active";
+            case RECOVERY:
+                return "recovery";
+            default:
+                break;
         }
         if (onGround) {
             return Math.abs(vx) > 1 ? "run" : "idle";
@@ -136,6 +205,22 @@ public class Fighter {
 
     public int respawnTicks() {
         return respawnTicks;
+    }
+
+    public int hitstunTicks() {
+        return hitstunTicks;
+    }
+
+    public boolean attacking() {
+        return attacking;
+    }
+
+    public int lastHitBy() {
+        return lastHitBy;
+    }
+
+    public long lastHitTick() {
+        return lastHitTick;
     }
 
     public long eliminatedAtTick() {

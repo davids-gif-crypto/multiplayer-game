@@ -79,11 +79,13 @@ function buildBackground() {
 }
 
 // Draws one frame.
-//   views   Map of id to { x, y, face, fighter, inv, visible } from interp.js
-//   roster  Map of id to { name, color }
-//   myId    my player id, so my tag stands out and I am drawn on top
-//   now     time in ms, used for blinking
-export function drawFrame(views, roster, myId, now) {
+//   scene.fighters  Map of id to fighter views from interp.js
+//   scene.globs     Map of id to glob views from interp.js
+//   scene.roster    Map of id to { name, color }
+//   scene.myId      my player id, so my tag stands out and I am drawn on top
+//   now             time in ms, used for blinking
+//   dt              seconds since the last frame, used to move particles
+export function drawFrame(scene, now, dt) {
   // Letterbox bars, then the pre-drawn stage.
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = LETTERBOX_COLOR;
@@ -95,28 +97,216 @@ export function drawFrame(views, roster, myId, now) {
   ctx.setTransform(k, 0, 0, k, offsetX * pixelRatio, offsetY * pixelRatio);
 
   // Everyone else first, then me, so I am never hidden behind someone.
-  for (const view of views.values()) {
-    if (view.visible && view.id !== myId) {
-      drawPlayer(view, roster.get(view.id), false, now);
+  for (const view of scene.fighters.values()) {
+    if (view.visible && view.id !== scene.myId) {
+      drawPlayer(view, scene.roster.get(view.id), false, now);
     }
   }
-  const me = views.get(myId);
+  const me = scene.fighters.get(scene.myId);
   if (me !== undefined && me.visible) {
-    drawPlayer(me, roster.get(myId), true, now);
+    drawPlayer(me, scene.roster.get(scene.myId), true, now);
   }
+
+  // Globs and splats go on top of the fighters.
+  for (const glob of scene.globs.values()) {
+    if (glob.visible) {
+      drawGlob(glob);
+    }
+  }
+  updateAndDrawParticles(dt);
 }
 
 function drawPlayer(view, info, isMe, now) {
   // Blink while invulnerable after respawning.
   const blinkOff = view.inv > 0 && Math.floor(now / 100) % 2 === 0;
   ctx.globalAlpha = blinkOff ? 0.35 : 1;
+
+  // Lean the whole fighter a little, turning around its middle:
+  // back while winding up, forward while hitting, and toward the
+  // direction of the launch while in hitstun.
+  const middleY = view.y - (FIGHTER_HEIGHT[view.fighter] || 70) / 2;
+  let tilt = 0;
+  if (view.st === "hitstun") {
+    tilt = view.vx >= 0 ? 0.35 : -0.35;
+  } else if (view.st === "startup") {
+    tilt = -0.12 * view.face;
+  } else if (view.st === "active") {
+    tilt = 0.1 * view.face;
+  }
+  ctx.save();
+  if (tilt !== 0) {
+    ctx.translate(view.x, middleY);
+    ctx.rotate(tilt);
+    ctx.translate(-view.x, -middleY);
+  }
   drawFighter(ctx, view.fighter, view.x, view.y, view.face, 1);
+
+  // A white flash for a few frames right after being hit.
+  if (view.flash > 0) {
+    drawFlash(view.fighter, view.x, view.y, view.face);
+    view.flash--;
+  }
+  ctx.restore();
   ctx.globalAlpha = 1;
+
+  if (view.st === "active") {
+    drawSwoosh(view);
+  }
 
   if (info !== undefined) {
     const headY = view.y - (FIGHTER_HEIGHT[view.fighter] || 70);
     drawNameTag(info.name, info.color, view.x, headY, isMe);
   }
+}
+
+// The swing or jab, drawn where its hitbox is (see Balance.java).
+function drawSwoosh(view) {
+  ctx.save();
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.face, 1); // forward is always +x from here
+  ctx.lineCap = "round";
+  if (view.fighter === "BRAWLER") {
+    // A wide arc in front of the meatball.
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(28, -28, 48, -1.0, 1.0);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(138, 75, 42, 0.6)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(28, -28, 48, -0.8, 0.8);
+    ctx.stroke();
+  } else if (view.fighter === "SPEEDSTER") {
+    // A quick straight jab.
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 8;
+    line(ctx, 14, -36, 56, -36);
+    ctx.fillStyle = "#f5c542";
+    circle(ctx, 58, -36, 7);
+  }
+  ctx.restore();
+}
+
+// A white shape over the fighter's body.
+function drawFlash(type, x, y, face) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(face, 1);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+  if (type === "BRAWLER") {
+    circle(ctx, 0, -28, 29);
+  } else if (type === "SPEEDSTER") {
+    roundRect(ctx, -18, -73, 36, 73, 7);
+    ctx.fill();
+  } else {
+    roundRect(ctx, -22, -79, 44, 79, 12);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// A ketchup glob: a red ball with a short fading trail behind it.
+function drawGlob(glob) {
+  const back = glob.vx >= 0 ? -1 : 1;
+  ctx.fillStyle = "rgba(214, 40, 40, 0.3)";
+  circle(ctx, glob.x + back * 22, glob.y, 7);
+  ctx.fillStyle = "rgba(214, 40, 40, 0.55)";
+  circle(ctx, glob.x + back * 12, glob.y, 10);
+  ctx.fillStyle = "#d62828";
+  circle(ctx, glob.x, glob.y, 14);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+  circle(ctx, glob.x - back * 4, glob.y - 5, 4);
+}
+
+// ---------- Splats (a small particle system) ----------
+//
+// All 80 particles are made once, up front. A splat grabs free ones and
+// "kills" them when they fade out. Nothing new is created while playing,
+// which keeps the frame rate steady on slow computers.
+
+const MAX_PARTICLES = 80;
+const SPLAT_SECONDS = 0.3;
+const STAR = 0;
+const DROP = 1;
+const particles = [];
+for (let i = 0; i < MAX_PARTICLES; i++) {
+  particles.push({ alive: false, kind: DROP, x: 0, y: 0, vx: 0, vy: 0, age: 0, size: 0, spin: 0, color: "" });
+}
+
+// A splat where a hit landed: a bright star and a ring of sauce droplets.
+export function spawnSplat(x, y, big) {
+  const scale = big ? 1.7 : 1;
+  addParticle(STAR, x, y, 0, 0, 18 * scale, "#fff3b0");
+  const drops = big ? 8 : 6;
+  for (let i = 0; i < drops; i++) {
+    const angle = (i / drops) * Math.PI * 2 + Math.random() * 0.5;
+    const speed = (180 + Math.random() * 160) * scale;
+    const color = i % 2 === 0 ? "#e8432e" : "#c0392b";
+    addParticle(DROP, x, y, Math.cos(angle) * speed, Math.sin(angle) * speed - 80, (4 + Math.random() * 3) * scale, color);
+  }
+}
+
+function addParticle(kind, x, y, vx, vy, size, color) {
+  for (const p of particles) {
+    if (!p.alive) {
+      p.alive = true;
+      p.kind = kind;
+      p.x = x;
+      p.y = y;
+      p.vx = vx;
+      p.vy = vy;
+      p.age = 0;
+      p.size = size;
+      p.spin = Math.random() * Math.PI;
+      p.color = color;
+      return;
+    }
+  }
+  // All 80 are busy: skip this one. Nobody notices one missing droplet.
+}
+
+function updateAndDrawParticles(dt) {
+  for (const p of particles) {
+    if (!p.alive) {
+      continue;
+    }
+    p.age += dt;
+    if (p.age >= SPLAT_SECONDS) {
+      p.alive = false;
+      continue;
+    }
+    p.vy += 900 * dt; // droplets fall
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    ctx.globalAlpha = 1 - p.age / SPLAT_SECONDS; // fade out
+    ctx.fillStyle = p.color;
+    if (p.kind === STAR) {
+      drawStar(p.x, p.y, p.size, p.spin);
+    } else {
+      circle(ctx, p.x, p.y, p.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// An 8 pointed star, for the flash of a hit.
+function drawStar(x, y, radius, spin) {
+  ctx.beginPath();
+  for (let i = 0; i < 16; i++) {
+    const r = i % 2 === 0 ? radius : radius * 0.45;
+    const a = spin + (i / 16) * Math.PI * 2;
+    const px = x + Math.cos(a) * r;
+    const py = y + Math.sin(a) * r;
+    if (i === 0) {
+      ctx.moveTo(px, py);
+    } else {
+      ctx.lineTo(px, py);
+    }
+  }
+  ctx.closePath();
+  ctx.fill();
 }
 
 // A colored tag with the nickname, and a small triangle pointing at the head.

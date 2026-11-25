@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.foodfight.sim.Fighter;
 import com.foodfight.sim.GameEvent;
+import com.foodfight.sim.Projectile;
 
 import java.util.List;
 
@@ -171,15 +172,22 @@ public final class Protocol {
         }
     }
 
+    /** One ketchup glob inside a snapshot. owner is the id of the Zoner who fired it. */
+    public record ProjectileState(int id, int owner, double x, double y, double vx) {
+
+        public static ProjectileState of(Projectile p) {
+            return new ProjectileState(p.id, p.ownerId, round1(p.x()), round1(p.y()), round1(p.vx()));
+        }
+    }
+
     /**
      * A snapshot of the match, sent 30 times per second during the countdown
      * and the match. Events are things that happened since the last snapshot.
-     * Projectiles are added in Milestone 3.
      */
     public record State(String t, long tick, String phase, int timeLeft,
-                        List<PlayerState> players, List<?> projectiles, List<GameEvent> events) {
+                        List<PlayerState> players, List<ProjectileState> projectiles, List<GameEvent> events) {
         public State(long tick, String phase, int timeLeft,
-                     List<PlayerState> players, List<?> projectiles, List<GameEvent> events) {
+                     List<PlayerState> players, List<ProjectileState> projectiles, List<GameEvent> events) {
             this("state", tick, phase, timeLeft, players, projectiles, events);
         }
     }

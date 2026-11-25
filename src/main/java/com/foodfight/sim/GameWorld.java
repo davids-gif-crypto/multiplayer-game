@@ -8,23 +8,35 @@ import static com.foodfight.sim.MathUtil.approach;
 /**
  * The game simulation for one match. Plain Java: no networking, no threads,
  * no web code. The room calls {@link #step()} 60 times per second, and each
- * step moves every fighter forward by 1/60 of a second.
+ * step moves everything forward by 1/60 of a second.
  *
- * Order of one step for each fighter:
- * 1. Count down timers (respawn, invulnerability, drop through).
- * 2. Read the held keys: run, jump, drop through (skipped during hitstun).
- * 3. Apply gravity.
- * 4. Move, then land on platforms or bump into the tray from below.
- * 5. Check the blast zone. Flying out costs a stock.
+ * One step has three parts:
+ *   A. Update each fighter:
+ *      1. Count down timers (respawn, invulnerability, attack, cooldowns).
+ *      2. Read the held keys: run, jump, drop through, attack
+ *         (all skipped during hitstun).
+ *      3. Apply gravity.
+ *      4. Move, then land on platforms or bump into the tray from below.
+ *      5. Check the blast zone. Flying out costs a stock.
+ *   B. Move the ketchup globs.
+ *   C. Find every hit, then apply them all. Finding them all first is fair:
+ *      if two fighters hit each other on the same tick, both get hit.
  */
 public class GameWorld {
 
     private static final double DT = Balance.DT;
 
+    /** A hit that was found in part C but not applied yet. */
+    private record PendingHit(Fighter target, AttackStats attack, int damage, int direction,
+                              int attackerId, double x, double y) {
+    }
+
     private final Stage stage;
     private final List<Fighter> fighters = new ArrayList<>();
+    private final List<Projectile> projectiles = new ArrayList<>();
     private final List<GameEvent> events = new ArrayList<>();
     private long tick = 0;
+    private int nextProjectileId = 1;
 
     public GameWorld(Stage stage) {
         this.stage = stage;
@@ -42,33 +54,58 @@ public class GameWorld {
         return fighter;
     }
 
-    /** Sets the keys a player is holding. Unknown ids are ignored. */
+    /**
+     * Sets the keys a player is holding. Unknown ids are ignored.
+     * Jump and attack only do something at the moment they are pressed
+     * (holding them does not repeat), so presses are noted here, as they
+     * arrive, and used up by the next tick.
+     */
     public void setInput(int id, InputState input) {
         Fighter fighter = fighter(id);
-        if (fighter != null) {
-            fighter.input = input;
+        if (fighter == null) {
+            return;
         }
+        if (input.jump() && !fighter.input.jump()) {
+            fighter.jumpTapped = true;
+        }
+        if (input.attack() && !fighter.input.attack()) {
+            fighter.attackTapped = true;
+        }
+        if (input.special() && !fighter.input.special()) {
+            fighter.specialTapped = true;
+        }
+        fighter.input = input;
     }
 
     /** Runs one tick (1/60 of a second) of the simulation. */
     public void step() {
         tick++;
         for (Fighter fighter : fighters) {
-            updateFighter(fighter);
+            updateFighter(fighter);   // part A
         }
+        updateProjectiles();          // part B
+        resolveHits();                // part C
+        projectiles.removeIf(p -> !p.alive);
     }
 
     // =================================================================
-    // One fighter, one tick
+    // Part A: one fighter, one tick
     // =================================================================
 
     private void updateFighter(Fighter f) {
+        // Use up the key presses noted by setInput. A press only counts on
+        // the tick right after it, so holding a key does not jump or attack
+        // over and over, and a press during hitstun is simply lost.
+        boolean jumpPressed = f.jumpTapped;
+        boolean attackPressed = f.attackTapped;
+        boolean specialPressed = f.specialTapped;
+        f.jumpTapped = false;
+        f.attackTapped = false;
+        f.specialTapped = false;
+
         if (f.isOut()) {
             return; // spectators do nothing
         }
-
-        boolean jumpPressed = f.input.jump() && !f.jumpWasHeld;
-        f.jumpWasHeld = f.input.jump();
 
         // Knocked out and waiting to come back?
         if (f.respawnTicks > 0) {
@@ -86,12 +123,26 @@ public class GameWorld {
         if (f.dropThroughTicks > 0) {
             f.dropThroughTicks--;
         }
+        if (f.globCooldownTicks > 0) {
+            f.globCooldownTicks--;
+        }
+        if (f.attacking) {
+            f.attackTicks++;
+            if (f.attackTicks > f.type.attack.totalTicks()) {
+                f.attacking = false; // the attack is over
+            }
+        }
 
         // 2. Controls. In hitstun the player has no control at all and just
-        // keeps flying, slowed a little by air drag.
+        // keeps flying, slowed a little by air drag (or by friction if they
+        // are sliding along the ground).
         if (f.hitstunTicks > 0) {
             f.hitstunTicks--;
-            f.vx *= 1 - Balance.HITSTUN_AIR_DRAG * DT;
+            if (f.onGround) {
+                f.vx = approach(f.vx, 0, Balance.GROUND_DECEL * DT);
+            } else {
+                f.vx *= 1 - Balance.HITSTUN_AIR_DRAG * DT;
+            }
         } else {
             runControl(f);
             if (jumpPressed) {
@@ -99,6 +150,18 @@ public class GameWorld {
             } else if (f.input.down()) {
                 tryDropThrough(f);
             }
+            if (attackPressed) {
+                tryStartAttack(f);
+            }
+            if (specialPressed && Balance.SPECIALS_ENABLED) {
+                trySpecial(f);
+            }
+        }
+
+        // The Zoner fires its glob on the first active tick of its attack.
+        if (f.attacking && f.type.attack.firesGlob()
+                && f.attackTicks == f.type.attack.startupTicks() + 1) {
+            fireGlob(f);
         }
 
         // 3. Gravity
@@ -115,7 +178,11 @@ public class GameWorld {
     private void runControl(Fighter f) {
         int direction = (f.input.right() ? 1 : 0) - (f.input.left() ? 1 : 0);
         if (direction != 0) {
-            f.face = direction;
+            // You face the way you last pressed, but not in the middle of an
+            // attack, so a swing always goes where it started.
+            if (!f.attacking) {
+                f.face = direction;
+            }
             double accel = f.onGround ? Balance.GROUND_ACCEL : Balance.AIR_ACCEL;
             f.vx = approach(f.vx, direction * f.type.runSpeed, accel * DT);
         } else {
@@ -147,6 +214,60 @@ public class GameWorld {
             f.onGround = false;
             f.standingOn = null;
         }
+    }
+
+    /**
+     * Starts the basic attack, if allowed. Not allowed while already
+     * attacking, or while invulnerable after a respawn (so nobody can attack
+     * the moment they come back). Hitstun is already ruled out by the caller.
+     * The Zoner also needs its cooldown to be over and a free glob.
+     */
+    private void tryStartAttack(Fighter f) {
+        if (f.attacking || f.invulnerableTicks > 0) {
+            return;
+        }
+        if (f.type.attack.firesGlob()) {
+            if (f.globCooldownTicks > 0 || globsAlive(f.id) >= Balance.GLOB_MAX_ALIVE) {
+                return;
+            }
+        }
+        f.attacking = true;
+        f.attackTicks = 1;
+        f.hitThisAttack.clear();
+    }
+
+    /**
+     * Stretch goal hook: the special attacks (Brawler ground pound, Speedster
+     * dash, Zoner ketchup puddle). Only called when Balance.SPECIALS_ENABLED
+     * is true, and it does nothing yet.
+     */
+    private void trySpecial(Fighter f) {
+        // Not built yet. See section 15 of PROMPT.md.
+    }
+
+    /** Stops an attack early, for example because the attacker got hit. */
+    private void cancelAttack(Fighter f) {
+        f.attacking = false;
+        f.attackTicks = 0;
+    }
+
+    /** Fires a ketchup glob from the front of the bottle. */
+    private void fireGlob(Fighter f) {
+        double x = f.x + f.face * (f.type.width / 2 + Balance.GLOB_RADIUS);
+        double y = f.y - f.type.height * 0.55;
+        projectiles.add(new Projectile(nextProjectileId++, f.id, f.type.attack, x, y,
+                f.face * Balance.GLOB_SPEED));
+        f.globCooldownTicks = Balance.GLOB_COOLDOWN_TICKS;
+    }
+
+    private int globsAlive(int ownerId) {
+        int count = 0;
+        for (Projectile p : projectiles) {
+            if (p.ownerId == ownerId && p.alive) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private void applyGravity(Fighter f) {
@@ -242,6 +363,7 @@ public class GameWorld {
         f.vx = 0;
         f.vy = 0;
         f.hitstunTicks = 0;
+        cancelAttack(f);
         events.add(new GameEvent.Ko(f.id, centerX, centerY, side));
 
         if (f.stocks > 0) {
@@ -264,7 +386,119 @@ public class GameWorld {
         f.standingOn = null;
         f.dropThroughTicks = 0;
         f.hitstunTicks = 0;
+        f.globCooldownTicks = 0;
+        cancelAttack(f);
         events.add(new GameEvent.Respawn(f.id));
+    }
+
+    // =================================================================
+    // Part B: ketchup globs
+    // =================================================================
+
+    private void updateProjectiles() {
+        for (Projectile p : projectiles) {
+            p.vy += Balance.GLOB_GRAVITY * DT;
+            p.x += p.vx * DT;
+            p.y += p.vy * DT;
+            p.ticksLeft--;
+            // Globs fly through platforms, so there is no platform check here.
+            if (p.ticksLeft <= 0 || !stage.blastZone().contains(p.x, p.y)) {
+                p.alive = false;
+            }
+        }
+    }
+
+    // =================================================================
+    // Part C: hits
+    // =================================================================
+
+    /** Finds every hit this tick, then applies them all. */
+    private void resolveHits() {
+        List<PendingHit> hits = new ArrayList<>();
+        findMeleeHits(hits);
+        findGlobHits(hits);
+        for (PendingHit hit : hits) {
+            applyHit(hit.target(), hit.attack(), hit.damage(), hit.direction(), hit.attackerId(), hit.x(), hit.y());
+        }
+    }
+
+    /** Can this fighter be hit right now? */
+    private static boolean canBeHit(Fighter target) {
+        return target.isAlive() && target.invulnerableTicks == 0;
+    }
+
+    private void findMeleeHits(List<PendingHit> hits) {
+        for (Fighter attacker : fighters) {
+            AttackStats attack = attacker.type.attack;
+            if (!attacker.isAlive() || attack.firesGlob()
+                    || attacker.attackPhase() != Fighter.AttackPhase.ACTIVE) {
+                continue;
+            }
+            Rect hitbox = attacker.attackHitbox();
+            for (Fighter target : fighters) {
+                if (target == attacker || !canBeHit(target) || attacker.hitThisAttack.contains(target.id)) {
+                    continue;
+                }
+                Rect hurtbox = target.hurtbox();
+                if (hitbox.overlaps(hurtbox)) {
+                    attacker.hitThisAttack.add(target.id); // each attack hits each target once
+                    // The splat goes in the middle of where the two boxes overlap.
+                    double x = (Math.max(hitbox.left(), hurtbox.left()) + Math.min(hitbox.right(), hurtbox.right())) / 2;
+                    double y = (Math.max(hitbox.top(), hurtbox.top()) + Math.min(hitbox.bottom(), hurtbox.bottom())) / 2;
+                    hits.add(new PendingHit(target, attack, attack.damage(), attacker.face, attacker.id, x, y));
+                }
+            }
+        }
+    }
+
+    private void findGlobHits(List<PendingHit> hits) {
+        for (Projectile p : projectiles) {
+            if (!p.alive) {
+                continue;
+            }
+            for (Fighter target : fighters) {
+                if (target.id == p.ownerId || !canBeHit(target)) {
+                    continue; // never hits its own Zoner, and flies through invulnerable fighters
+                }
+                if (p.touches(target.hurtbox())) {
+                    int damage = Knockback.globDamage(p.distanceTravelled());
+                    hits.add(new PendingHit(target, p.stats, damage, p.direction(), p.ownerId, p.x, p.y));
+                    p.alive = false; // a glob splats on the first fighter it touches
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Applies one hit, following the steps in Knockback.java. Package private
+     * so the tuning test can launch a fighter without setting up an attack.
+     */
+    void applyHit(Fighter target, AttackStats attack, int damage, int direction,
+                  int attackerId, double hitX, double hitY) {
+        // 1. Damage
+        target.percent = Math.min(target.percent + damage, Balance.MAX_PERCENT);
+
+        // 2. Knockback
+        double kb = Knockback.knockback(attack.baseKnockback(), attack.knockbackGrowth(),
+                target.percent, target.type.weight);
+
+        // 3. Launch. The old speed is thrown away.
+        target.vx = Knockback.launchVx(kb, attack.launchAngleDegrees(), direction);
+        target.vy = Knockback.launchVy(kb, attack.launchAngleDegrees());
+        target.onGround = false;
+        target.standingOn = null;
+
+        // 4. Hitstun. Getting hit also cancels the target's own attack.
+        target.hitstunTicks = Knockback.hitstunTicks(kb);
+        cancelAttack(target);
+
+        // Remember who did it, for KO credit.
+        target.lastHitBy = attackerId;
+        target.lastHitTick = tick;
+
+        // 5. Tell the browsers, so they can draw a splat.
+        events.add(new GameEvent.Hit(target.id, hitX, hitY, damage, Knockback.isBigHit(kb)));
     }
 
     // =================================================================
@@ -273,6 +507,11 @@ public class GameWorld {
 
     public List<Fighter> fighters() {
         return fighters;
+    }
+
+    /** The globs that are flying right now. */
+    public List<Projectile> projectiles() {
+        return projectiles;
     }
 
     public Fighter fighter(int id) {

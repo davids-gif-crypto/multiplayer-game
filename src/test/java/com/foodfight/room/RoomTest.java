@@ -335,6 +335,35 @@ class RoomTest {
     }
 
     @Test
+    void aQuickTapArrivingInOneTickStillCounts() {
+        FakeLink[] links = twoPlayersCountingDown();
+        ticks(3 * Balance.COUNTDOWN_STEP_TICKS);
+        // Press and release land in the inbox before the same tick.
+        room.enqueue(links[0], new Protocol.Input(1, false, false, false, false, true, false, false));
+        room.enqueue(links[0], new Protocol.Input(2, false, false, false, false, false, false, false));
+        room.tick();
+        assertTrue(room.world().fighter(idOf(links[0])).attacking());
+    }
+
+    @Test
+    void globsShowUpInSnapshots() {
+        FakeLink host = create("Host");
+        FakeLink guest = join("Guest");
+        send(host, new Pick("ZONER"));
+        send(host, new Start());
+        ticks(3 * Balance.COUNTDOWN_STEP_TICKS);
+        assertEquals(Phase.PLAYING, room.phase());
+
+        send(host, new Protocol.Input(1, false, false, false, false, true, false, false));
+        ticks(14);
+        State state = host.last(State.class);
+        assertEquals(1, state.projectiles().size());
+        assertEquals(idOf(host), state.projectiles().get(0).owner());
+        assertTrue(state.projectiles().get(0).vx() > 0, "the Zoner spawns on the left, facing right");
+        assertNull(guest.lastErrorCode());
+    }
+
+    @Test
     void inputInTheLobbyIsIgnored() {
         FakeLink host = create("Host");
         send(host, keys(false, true));

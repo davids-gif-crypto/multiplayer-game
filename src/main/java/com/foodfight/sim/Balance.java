@@ -109,10 +109,11 @@ public final class Balance {
     public static final int DROP_THROUGH_TICKS = 12;
 
     /**
-     * Air drag while in hitstun: roughly the fraction of sideways speed lost
-     * per second. Small, so a launched fighter keeps most of its speed.
+     * Air drag while flying in hitstun: roughly the fraction of sideways
+     * speed lost per second. Kept slight, so a launched fighter keeps most of
+     * its speed. (On the ground, hitstun slows you with GROUND_DECEL instead.)
      */
-    public static final double HITSTUN_AIR_DRAG = 0.6;
+    public static final double HITSTUN_AIR_DRAG = 0.3;
 
     // ---------------------------------------------------------------
     // Stocks and respawning
@@ -128,32 +129,119 @@ public final class Balance {
     public static final int RESPAWN_INVULNERABLE_TICKS = 120;
 
     // ---------------------------------------------------------------
-    // Fighters. Hurtbox is the box you can be hit in (width x height).
-    // Heavier fighters fly less far when hit. Jump speed 1 is the first
-    // jump, jump speed 2 is the double jump.
+    // Getting hit (see Knockback.java for how these are used)
+    //   knockback = (base + growth * percent) / weight
+    //   hitstun   = 0.15 + knockback / 2500 seconds, kept between 0.15 and 0.9
     // ---------------------------------------------------------------
 
-    // Brawler (meatball): slow and heavy.
+    public static final double HITSTUN_MIN_SECONDS = 0.15;
+    public static final double HITSTUN_MAX_SECONDS = 0.9;
+    public static final double HITSTUN_KNOCKBACK_DIVISOR = 2500;
+
+    /** Hits with more knockback than this count as "big" and get a bigger splat. */
+    public static final double BIG_HIT_KNOCKBACK = 900;
+
+    /** Damage percent never goes above this, so it always fits on screen. */
+    public static final int MAX_PERCENT = 999;
+
+    /**
+     * Stretch goal switch: special attacks on K. The key already reaches the
+     * server, but nothing happens until this is true and the specials are built.
+     */
+    public static final boolean SPECIALS_ENABLED = false;
+
+    // ---------------------------------------------------------------
+    // Fighters
+    //
+    // Hurtbox: the box you can be hit in (width x height).
+    // Weight: heavier fighters fly less far when hit.
+    // Jump speed 1 is the first jump, jump speed 2 is the double jump.
+    //
+    // Attacks go through three parts, counted in ticks:
+    //   startup (winding up), active (the hitbox exists), recovery (cooling down).
+    // Launch angle is in degrees up from flat.
+    // Melee hitbox: a width x height box in front of the fighter, at the
+    // height of the fighter's middle. Offset is the gap from the fighter's
+    // middle to the near edge of the box.
+    //
+    // TUNING NOTE: weight, base knockback and growth were changed from the
+    // first numbers in the design (shown as "was ...") to meet the tuning
+    // goals. Run ./gradlew tuning to print the table, and see TuningTest.java
+    // for the goals and the reasons.
+    // ---------------------------------------------------------------
+
+    // Brawler (meatball): slow, heavy, hits hard.
     public static final double BRAWLER_WIDTH = 56;
     public static final double BRAWLER_HEIGHT = 56;
-    public static final double BRAWLER_WEIGHT = 1.3;
+    public static final double BRAWLER_WEIGHT = 1.1;              // was 1.3
     public static final double BRAWLER_RUN_SPEED = 250;
     public static final double BRAWLER_JUMP_SPEED_1 = 780;
     public static final double BRAWLER_JUMP_SPEED_2 = 700;
+    public static final int BRAWLER_STARTUP_TICKS = 11;
+    public static final int BRAWLER_ACTIVE_TICKS = 7;
+    public static final int BRAWLER_RECOVERY_TICKS = 18;
+    public static final int BRAWLER_DAMAGE = 10;
+    public static final double BRAWLER_BASE_KNOCKBACK = 730;      // was 420
+    public static final double BRAWLER_KNOCKBACK_GROWTH = 4.3;    // was 9
+    public static final double BRAWLER_LAUNCH_ANGLE = 40;
+    public static final double BRAWLER_HITBOX_WIDTH = 70;
+    public static final double BRAWLER_HITBOX_HEIGHT = 50;
+    public static final double BRAWLER_HITBOX_OFFSET = 20;
 
-    // Speedster (french fry): fast and light.
+    // Speedster (french fry): fast and light, quick weak jabs.
     public static final double SPEEDSTER_WIDTH = 36;
     public static final double SPEEDSTER_HEIGHT = 72;
-    public static final double SPEEDSTER_WEIGHT = 0.8;
+    public static final double SPEEDSTER_WEIGHT = 0.9;            // was 0.8
     public static final double SPEEDSTER_RUN_SPEED = 400;
     public static final double SPEEDSTER_JUMP_SPEED_1 = 860;
     public static final double SPEEDSTER_JUMP_SPEED_2 = 780;
+    public static final int SPEEDSTER_STARTUP_TICKS = 4;
+    public static final int SPEEDSTER_ACTIVE_TICKS = 5;
+    public static final int SPEEDSTER_RECOVERY_TICKS = 8;
+    public static final int SPEEDSTER_DAMAGE = 4;
+    public static final double SPEEDSTER_BASE_KNOCKBACK = 450;    // was 260
+    public static final double SPEEDSTER_KNOCKBACK_GROWTH = 2.9;  // was 6
+    public static final double SPEEDSTER_LAUNCH_ANGLE = 35;
+    public static final double SPEEDSTER_HITBOX_WIDTH = 50;
+    public static final double SPEEDSTER_HITBOX_HEIGHT = 36;
+    public static final double SPEEDSTER_HITBOX_OFFSET = 12;
 
-    // Zoner (ketchup bottle): in the middle.
+    // Zoner (ketchup bottle): in the middle, shoots ketchup globs.
+    // Its damage comes from how far the glob flew (see GLOB_ below).
     public static final double ZONER_WIDTH = 44;
     public static final double ZONER_HEIGHT = 76;
     public static final double ZONER_WEIGHT = 1.0;
     public static final double ZONER_RUN_SPEED = 300;
     public static final double ZONER_JUMP_SPEED_1 = 800;
     public static final double ZONER_JUMP_SPEED_2 = 720;
+    public static final int ZONER_STARTUP_TICKS = 10;
+    public static final int ZONER_ACTIVE_TICKS = 1;
+    public static final int ZONER_RECOVERY_TICKS = 14;
+    public static final double ZONER_BASE_KNOCKBACK = 350;        // was 200
+    public static final double ZONER_KNOCKBACK_GROWTH = 2.4;      // was 5
+    public static final double ZONER_LAUNCH_ANGLE = 30;
+
+    // ---------------------------------------------------------------
+    // The Zoner's ketchup glob
+    // ---------------------------------------------------------------
+
+    public static final double GLOB_RADIUS = 14;
+    /** Sideways speed, in the direction the Zoner faces. */
+    public static final double GLOB_SPEED = 650;
+    /** A tiny pull downward, so the glob droops a little. */
+    public static final double GLOB_GRAVITY = 150;
+    /** The glob disappears after this many ticks (1.2 seconds). */
+    public static final int GLOB_LIFETIME_TICKS = 72;
+    /** Each Zoner can have at most this many globs flying at once. */
+    public static final int GLOB_MAX_ALIVE = 2;
+    /** Ticks after a shot before the Zoner can start another one. */
+    public static final int GLOB_COOLDOWN_TICKS = 25;
+    /** Damage when the glob hits close to where it was fired... */
+    public static final int GLOB_MIN_DAMAGE = 3;
+    /** ...and when it hits after flying far. */
+    public static final int GLOB_MAX_DAMAGE = 8;
+    /** Up to this distance the glob does the minimum damage. */
+    public static final double GLOB_SHORT_RANGE = 150;
+    /** From this distance on the glob does the maximum damage. */
+    public static final double GLOB_LONG_RANGE = 600;
 }
